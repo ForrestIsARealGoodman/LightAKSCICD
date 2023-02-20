@@ -1,0 +1,58 @@
+pipeline {
+  agent {
+    kubernetes {
+      yaml """
+apiVersion: v1
+kind: Pod
+metadata:
+  name: autodeploy
+spec:
+  containers:
+    - name: autodeploy
+      image: acr.azurecr.io/cd.microapp:v15
+      command: ["/bin/sh"]
+      args: ["-c", "while true; do echo hello; sleep 1000;done"]
+      envFrom:
+        - secretRef:
+             name: <CI Build Storage Table Key>
+        - secretRef:
+             name: <Azure SPN Credential secret>
+  restartPolicy: Never
+"""
+    }
+  }
+  options {
+      ansiColor('xterm')
+  }
+  stages {
+    stage('Perpare deploy') {
+      steps {
+        container('autodeploy') {
+          sh "cp /usr/src/app/* /home/jenkins/agent/workspace/${env.JOB_NAME}"
+          echo "Current job is ${env.JOB_NAME}"
+          echo "This job is to deploy ${params.subs_name} micro service ${params.component} for build of ${params.branch_name}, triggered by ${params.triggered_by}, running on node ${params.node_name}"
+          sh 'sleep 1'
+        }
+      }
+    }
+
+    stage('Start to deploy micro app resources') {
+      steps {
+        container('autodeploy') {
+          sh "python MicroServiceDeployment.py -sub ${params.subs_name} -component ${params.component} -release ${params.branch_name} -A "
+          sh 'sleep 1'
+        }
+      }
+    }
+
+    stage('Waiting for completion of last deployment') {
+      steps {
+        container('autodeploy') {
+          sh "python MicroServiceDeployment.py -sub ${params.subs_name} -component ${params.component} -release ${params.branch_name} -wait"
+          sh 'sleep 1'
+        }
+      }
+    }
+
+  }
+}

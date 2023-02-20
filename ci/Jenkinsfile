@@ -1,0 +1,58 @@
+@Library("SharedLibrary") _
+
+def noprintsh(cmd) {
+    sh('#!/bin/sh -e\n' + cmd)
+}
+
+pipeline {
+    agent { label 'Ubuntu' }
+    stages {
+        stage('Build Docker Image') {
+            steps {
+                script {
+                        def fullbranchname = "${env.BRANCH_NAME}"
+                        if (fullbranchname.split('/')[0] != 'feature') {
+                            echo "Skip build  container image for branch: ${env.BRANCH_NAME}"
+                            return
+                        }
+                        echo "Build  container image for branch: ${env.BRANCH_NAME}"
+                        def project_name = ""
+                        def ret = sh(script: "python3 get_branch_name.py ${fullbranchname}", returnStdout: true).trim()
+                        def build_image = "${project_name}_${ret}:v${env.BUILD_NUMBER}"
+                        echo "Build docker image ${build_image}..."
+                        withCredentials([string(credentialsId: 'production_acr_accesskey', variable: 'production_acr_accesskey')]) {               
+                            sh "sudo docker build -t productionacr.azurecr.io/${build_image} ."
+                            echo "Push docker image ${build_image} to ACR:productionacr.azurecr.io"
+                            sh "sudo docker login productionacr.azurecr.io -u 'productionacr' -p $productionacr_accesskey"
+                            sh "sudo docker push  productionacr.azurecr.io/${build_image}"
+                        }
+                   }
+               }
+        }
+        stage('Upload Build Info') {
+            steps {
+                script {
+                        def fullbranchname = "${env.BRANCH_NAME}"
+                        if (fullbranchname.split('/')[0] != 'feature') {
+                            echo "Skip build  container image for branch: ${env.BRANCH_NAME}"
+                            return
+                        }
+                        def project_name = ""
+                        def ret = sh(script: "python3 get_branch_name.py ${fullbranchname}", returnStdout: true).trim()
+                        def build_image = "${project_name}_${ret}:v${env.BUILD_NUMBER}"
+                        echo "Uploading  container image info: ${build_image}"
+                        withCredentials([string(credentialsId: 'CIbuildContext', variable: 'CI_BUILD_STORAGE_CONTEXT')]) {
+                            echo "CI_BUILD_STORAGE_CONTEXT:${CI_BUILD_STORAGE_CONTEXT}"
+                            def storage_context = "${CI_BUILD_STORAGE_CONTEXT}".split(';')
+                            def account_name = storage_context[0]
+                            def access_key = storage_context[1]
+                            echo "upload build info to CI Build"
+                            def upload_task = "python3 UploadImageInfo2AzTable.py -account ${account_name} -key ${access_key} -component '' -branch ${fullbranchname} -image ${build_image}"
+                            noprintsh(upload_task)
+                        }
+                        echo "Upload Done!"
+                   }
+               }
+        }
+    }
+}
